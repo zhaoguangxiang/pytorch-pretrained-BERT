@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2018 The Google AI Language Team Authors and The HugginFace Inc. team.
+# Copyright 2018 The Google AI Language Team Authors and The HuggingFace Inc. team.
 # Copyright (c) 2018, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,22 +15,27 @@
 # limitations under the License.
 """BERT finetuning runner."""
 
+from __future__ import absolute_import
+
+import argparse
+import csv
 import logging
 import os
-import argparse
 import random
-from tqdm import tqdm, trange
-import csv
+import sys
+from io import open
 
 import numpy as np
 import torch
-from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
+from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
+                              TensorDataset)
 from torch.utils.data.distributed import DistributedSampler
+from tqdm import tqdm, trange
 
+from pytorch_pretrained_bert.file_utils import PYTORCH_PRETRAINED_BERT_CACHE, WEIGHTS_NAME, CONFIG_NAME
+from pytorch_pretrained_bert.modeling import BertForMultipleChoice, BertConfig
+from pytorch_pretrained_bert.optimization import BertAdam, WarmupLinearSchedule
 from pytorch_pretrained_bert.tokenization import BertTokenizer
-from pytorch_pretrained_bert.modeling import BertForMultipleChoice
-from pytorch_pretrained_bert.optimization import BertAdam
-from pytorch_pretrained_bert.file_utils import PYTORCH_PRETRAINED_BERT_CACHE
 
 logging.basicConfig(format = '%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
                     datefmt = '%m/%d/%Y %H:%M:%S',
@@ -65,17 +70,17 @@ class SwagExample(object):
 
     def __repr__(self):
         l = [
-            f"swag_id: {self.swag_id}",
-            f"context_sentence: {self.context_sentence}",
-            f"start_ending: {self.start_ending}",
-            f"ending_0: {self.endings[0]}",
-            f"ending_1: {self.endings[1]}",
-            f"ending_2: {self.endings[2]}",
-            f"ending_3: {self.endings[3]}",
+            "swag_id: {}".format(self.swag_id),
+            "context_sentence: {}".format(self.context_sentence),
+            "start_ending: {}".format(self.start_ending),
+            "ending_0: {}".format(self.endings[0]),
+            "ending_1: {}".format(self.endings[1]),
+            "ending_2: {}".format(self.endings[2]),
+            "ending_3: {}".format(self.endings[3]),
         ]
 
         if self.label is not None:
-            l.append(f"label: {self.label}")
+            l.append("label: {}".format(self.label))
 
         return ", ".join(l)
 
@@ -102,7 +107,11 @@ class InputFeatures(object):
 def read_swag_examples(input_file, is_training):
     with open(input_file, 'r', encoding='utf-8') as f:
         reader = csv.reader(f)
-        lines = list(reader)
+        lines = []
+        for line in reader:
+            if sys.version_info[0] == 2:
+                line = list(unicode(cell, 'utf-8') for cell in line)
+            lines.append(line)
 
     if is_training and lines[0][-1] != 'label':
         raise ValueError(
@@ -184,15 +193,15 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
         label = example.label
         if example_index < 5:
             logger.info("*** Example ***")
-            logger.info(f"swag_id: {example.swag_id}")
+            logger.info("swag_id: {}".format(example.swag_id))
             for choice_idx, (tokens, input_ids, input_mask, segment_ids) in enumerate(choices_features):
-                logger.info(f"choice: {choice_idx}")
-                logger.info(f"tokens: {' '.join(tokens)}")
-                logger.info(f"input_ids: {' '.join(map(str, input_ids))}")
-                logger.info(f"input_mask: {' '.join(map(str, input_mask))}")
-                logger.info(f"segment_ids: {' '.join(map(str, segment_ids))}")
+                logger.info("choice: {}".format(choice_idx))
+                logger.info("tokens: {}".format(' '.join(tokens)))
+                logger.info("input_ids: {}".format(' '.join(map(str, input_ids))))
+                logger.info("input_mask: {}".format(' '.join(map(str, input_mask))))
+                logger.info("segment_ids: {}".format(' '.join(map(str, segment_ids))))
             if is_training:
-                logger.info(f"label: {label}")
+                logger.info("label: {}".format(label))
 
         features.append(
             InputFeatures(
@@ -233,11 +242,6 @@ def select_field(features, field):
         for feature in features
     ]
 
-def warmup_linear(x, warmup=0.002):
-    if x < warmup:
-        return x/warmup
-    return 1.0 - x
-
 def main():
     parser = argparse.ArgumentParser()
 
@@ -249,7 +253,8 @@ def main():
                         help="The input data dir. Should contain the .csv files (or other data files) for the task.")
     parser.add_argument("--bert_model", default=None, type=str, required=True,
                         help="Bert pre-trained model selected in the list: bert-base-uncased, "
-                             "bert-large-uncased, bert-base-cased, bert-base-multilingual, bert-base-chinese.")
+                        "bert-large-uncased, bert-base-cased, bert-large-cased, bert-base-multilingual-uncased, "
+                        "bert-base-multilingual-cased, bert-base-chinese.")
     parser.add_argument("--output_dir",
                         default=None,
                         type=str,
@@ -264,15 +269,12 @@ def main():
                              "Sequences longer than this will be truncated, and sequences shorter \n"
                              "than this will be padded.")
     parser.add_argument("--do_train",
-                        default=False,
                         action='store_true',
                         help="Whether to run training.")
     parser.add_argument("--do_eval",
-                        default=False,
                         action='store_true',
                         help="Whether to run eval on the dev set.")
     parser.add_argument("--do_lower_case",
-                        default=False,
                         action='store_true',
                         help="Set this flag if you are using an uncased model.")
     parser.add_argument("--train_batch_size",
@@ -297,7 +299,6 @@ def main():
                         help="Proportion of training to perform linear learning rate warmup for. "
                              "E.g., 0.1 = 10%% of training.")
     parser.add_argument("--no_cuda",
-                        default=False,
                         action='store_true',
                         help="Whether not to use CUDA when available")
     parser.add_argument("--local_rank",
@@ -313,7 +314,6 @@ def main():
                         default=1,
                         help="Number of updates steps to accumulate before performing a backward/update pass.")
     parser.add_argument('--fp16',
-                        default=False,
                         action='store_true',
                         help="Whether to use 16-bit float precision instead of 32-bit")
     parser.add_argument('--loss_scale',
@@ -340,7 +340,7 @@ def main():
         raise ValueError("Invalid gradient_accumulation_steps parameter: {}, should be >= 1".format(
                             args.gradient_accumulation_steps))
 
-    args.train_batch_size = int(args.train_batch_size / args.gradient_accumulation_steps)
+    args.train_batch_size = args.train_batch_size // args.gradient_accumulation_steps
 
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -353,20 +353,14 @@ def main():
 
     if os.path.exists(args.output_dir) and os.listdir(args.output_dir):
         raise ValueError("Output directory ({}) already exists and is not empty.".format(args.output_dir))
-    os.makedirs(args.output_dir, exist_ok=True)
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
 
     tokenizer = BertTokenizer.from_pretrained(args.bert_model, do_lower_case=args.do_lower_case)
 
-    train_examples = None
-    num_train_steps = None
-    if args.do_train:
-        train_examples = read_swag_examples(os.path.join(args.data_dir, 'train.csv'), is_training = True)
-        num_train_steps = int(
-            len(train_examples) / args.train_batch_size / args.gradient_accumulation_steps * args.num_train_epochs)
-
     # Prepare model
     model = BertForMultipleChoice.from_pretrained(args.bert_model,
-        cache_dir=PYTORCH_PRETRAINED_BERT_CACHE / 'distributed_{}'.format(args.local_rank),
+        cache_dir=os.path.join(str(PYTORCH_PRETRAINED_BERT_CACHE), 'distributed_{}'.format(args.local_rank)),
         num_choices=4)
     if args.fp16:
         model.half()
@@ -381,50 +375,13 @@ def main():
     elif n_gpu > 1:
         model = torch.nn.DataParallel(model)
 
-    # Prepare optimizer
-    param_optimizer = list(model.named_parameters())
-
-    # hack to remove pooler, which is not used
-    # thus it produce None grad that break apex
-    param_optimizer = [n for n in param_optimizer if 'pooler' not in n[0]]
-
-    no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
-    optimizer_grouped_parameters = [
-        {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
-        {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
-        ]
-    t_total = num_train_steps
-    if args.local_rank != -1:
-        t_total = t_total // torch.distributed.get_world_size()
-    if args.fp16:
-        try:
-            from apex.optimizers import FP16_Optimizer
-            from apex.optimizers import FusedAdam
-        except ImportError:
-            raise ImportError("Please install apex from https://www.github.com/nvidia/apex to use distributed and fp16 training.")
-
-        optimizer = FusedAdam(optimizer_grouped_parameters,
-                              lr=args.learning_rate,
-                              bias_correction=False,
-                              max_grad_norm=1.0)
-        if args.loss_scale == 0:
-            optimizer = FP16_Optimizer(optimizer, dynamic_loss_scale=True)
-        else:
-            optimizer = FP16_Optimizer(optimizer, static_loss_scale=args.loss_scale)
-    else:
-        optimizer = BertAdam(optimizer_grouped_parameters,
-                             lr=args.learning_rate,
-                             warmup=args.warmup_proportion,
-                             t_total=t_total)
-
-    global_step = 0
     if args.do_train:
+
+        # Prepare data loader
+
+        train_examples = read_swag_examples(os.path.join(args.data_dir, 'train.csv'), is_training = True)
         train_features = convert_examples_to_features(
             train_examples, tokenizer, args.max_seq_length, True)
-        logger.info("***** Running training *****")
-        logger.info("  Num examples = %d", len(train_examples))
-        logger.info("  Batch size = %d", args.train_batch_size)
-        logger.info("  Num steps = %d", num_train_steps)
         all_input_ids = torch.tensor(select_field(train_features, 'input_ids'), dtype=torch.long)
         all_input_mask = torch.tensor(select_field(train_features, 'input_mask'), dtype=torch.long)
         all_segment_ids = torch.tensor(select_field(train_features, 'segment_ids'), dtype=torch.long)
@@ -435,6 +392,53 @@ def main():
         else:
             train_sampler = DistributedSampler(train_data)
         train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.train_batch_size)
+
+        num_train_optimization_steps = len(train_dataloader) // args.gradient_accumulation_steps * args.num_train_epochs
+        if args.local_rank != -1:
+            num_train_optimization_steps = num_train_optimization_steps // torch.distributed.get_world_size()
+
+        # Prepare optimizer
+
+        param_optimizer = list(model.named_parameters())
+
+        # hack to remove pooler, which is not used
+        # thus it produce None grad that break apex
+        param_optimizer = [n for n in param_optimizer]
+
+        no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
+        optimizer_grouped_parameters = [
+            {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
+            {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
+            ]
+        if args.fp16:
+            try:
+                from apex.optimizers import FP16_Optimizer
+                from apex.optimizers import FusedAdam
+            except ImportError:
+                raise ImportError("Please install apex from https://www.github.com/nvidia/apex to use distributed and fp16 training.")
+
+            optimizer = FusedAdam(optimizer_grouped_parameters,
+                                  lr=args.learning_rate,
+                                  bias_correction=False,
+                                  max_grad_norm=1.0)
+            if args.loss_scale == 0:
+                optimizer = FP16_Optimizer(optimizer, dynamic_loss_scale=True)
+            else:
+                optimizer = FP16_Optimizer(optimizer, static_loss_scale=args.loss_scale)
+            warmup_linear = WarmupLinearSchedule(warmup=args.warmup_proportion,
+                                                 t_total=num_train_optimization_steps)
+        else:
+            optimizer = BertAdam(optimizer_grouped_parameters,
+                                 lr=args.learning_rate,
+                                 warmup=args.warmup_proportion,
+                                 t_total=num_train_optimization_steps)
+
+        global_step = 0
+
+        logger.info("***** Running training *****")
+        logger.info("  Num examples = %d", len(train_examples))
+        logger.info("  Batch size = %d", args.train_batch_size)
+        logger.info("  Num steps = %d", num_train_optimization_steps)
 
         model.train()
         for _ in trange(int(args.num_train_epochs), desc="Epoch"):
@@ -461,25 +465,36 @@ def main():
                 else:
                     loss.backward()
                 if (step + 1) % args.gradient_accumulation_steps == 0:
-                    # modify learning rate with special warm up BERT uses
-                    lr_this_step = args.learning_rate * warmup_linear(global_step/t_total, args.warmup_proportion)
-                    for param_group in optimizer.param_groups:
-                        param_group['lr'] = lr_this_step
+                    if args.fp16:
+                        # modify learning rate with special warm up BERT uses
+                        # if args.fp16 is False, BertAdam is used that handles this automatically
+                        lr_this_step = args.learning_rate * warmup_linear.get_lr(global_step, args.warmup_proportion)
+                        for param_group in optimizer.param_groups:
+                            param_group['lr'] = lr_this_step
                     optimizer.step()
                     optimizer.zero_grad()
                     global_step += 1
 
-    # Save a trained model
-    model_to_save = model.module if hasattr(model, 'module') else model  # Only save the model it-self
-    output_model_file = os.path.join(args.output_dir, "pytorch_model.bin")
-    torch.save(model_to_save.state_dict(), output_model_file)
 
-    # Load a trained model that you have fine-tuned
-    model_state_dict = torch.load(output_model_file)
-    model = BertForMultipleChoice.from_pretrained(args.bert_model,
-        state_dict=model_state_dict,
-        num_choices=4)
+    if args.do_train:
+        # Save a trained model, configuration and tokenizer
+        model_to_save = model.module if hasattr(model, 'module') else model  # Only save the model it-self
+
+        # If we save using the predefined names, we can load using `from_pretrained`
+        output_model_file = os.path.join(args.output_dir, WEIGHTS_NAME)
+        output_config_file = os.path.join(args.output_dir, CONFIG_NAME)
+
+        torch.save(model_to_save.state_dict(), output_model_file)
+        model_to_save.config.to_json_file(output_config_file)
+        tokenizer.save_vocabulary(args.output_dir)
+
+        # Load a trained model and vocabulary that you have fine-tuned
+        model = BertForMultipleChoice.from_pretrained(args.output_dir, num_choices=4)
+        tokenizer = BertTokenizer.from_pretrained(args.output_dir, do_lower_case=args.do_lower_case)
+    else:
+        model = BertForMultipleChoice.from_pretrained(args.bert_model, num_choices=4)
     model.to(device)
+
 
     if args.do_eval and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
         eval_examples = read_swag_examples(os.path.join(args.data_dir, 'val.csv'), is_training = True)
@@ -500,7 +515,7 @@ def main():
         model.eval()
         eval_loss, eval_accuracy = 0, 0
         nb_eval_steps, nb_eval_examples = 0, 0
-        for input_ids, input_mask, segment_ids, label_ids in eval_dataloader:
+        for input_ids, input_mask, segment_ids, label_ids in tqdm(eval_dataloader, desc="Evaluating"):
             input_ids = input_ids.to(device)
             input_mask = input_mask.to(device)
             segment_ids = segment_ids.to(device)
@@ -526,7 +541,7 @@ def main():
         result = {'eval_loss': eval_loss,
                   'eval_accuracy': eval_accuracy,
                   'global_step': global_step,
-                  'loss': tr_loss/nb_tr_steps}
+                  'loss': tr_loss/global_step}
 
         output_eval_file = os.path.join(args.output_dir, "eval_results.txt")
         with open(output_eval_file, "w") as writer:

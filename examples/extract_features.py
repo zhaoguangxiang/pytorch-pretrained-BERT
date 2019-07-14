@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2018 The Google AI Language Team Authors and The HugginFace Inc. team.
+# Copyright 2018 The Google AI Language Team Authors and The HuggingFace Inc. team.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -57,7 +57,7 @@ class InputFeatures(object):
 
 
 def convert_examples_to_features(examples, seq_length, tokenizer):
-    """Loads a data file into a list of `InputBatch`s."""
+    """Loads a data file into a list of `InputFeature`s."""
 
     features = []
     for (ex_index, example) in enumerate(examples):
@@ -80,10 +80,10 @@ def convert_examples_to_features(examples, seq_length, tokenizer):
         # The convention in BERT is:
         # (a) For sequence pairs:
         #  tokens:   [CLS] is this jack ##son ##ville ? [SEP] no it is not . [SEP]
-        #  type_ids: 0   0  0    0    0     0       0 0    1  1  1  1   1 1
+        #  type_ids:   0   0  0    0    0     0      0   0    1  1  1   1  1   1
         # (b) For single sequences:
         #  tokens:   [CLS] the dog is hairy . [SEP]
-        #  type_ids: 0   0   0   0  0     0 0
+        #  type_ids:   0   0   0   0  0     0   0
         #
         # Where "type_ids" are used to indicate whether this is the first
         # sequence or the second sequence. The embedding vectors for `type=0` and
@@ -199,7 +199,7 @@ def main():
                              "bert-large-uncased, bert-base-cased, bert-base-multilingual, bert-base-chinese.")
 
     ## Other parameters
-    parser.add_argument("--do_lower_case", default=False, action='store_true', help="Set this flag if you are using an uncased model.")
+    parser.add_argument("--do_lower_case", action='store_true', help="Set this flag if you are using an uncased model.")
     parser.add_argument("--layers", default="-1,-2,-3,-4", type=str)
     parser.add_argument("--max_seq_length", default=128, type=int,
                         help="The maximum total input sequence length after WordPiece tokenization. Sequences longer "
@@ -210,7 +210,6 @@ def main():
                         default=-1,
                         help = "local_rank for distributed training on gpus")
     parser.add_argument("--no_cuda",
-                        default=False,
                         action='store_true',
                         help="Whether not to use CUDA when available")
 
